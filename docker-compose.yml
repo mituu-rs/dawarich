@@ -60,9 +60,9 @@ services:
       DATABASE_NAME: dawarich_development
       MIN_MINUTES_SPENT_IN_CITY: 60
       APPLICATION_HOST: localhost
-      APPLICATION_HOSTS: localhost
+      APPLICATION_HOSTS: localhost,map.mituu.wtf
       TIME_ZONE: Europe/London
-      APPLICATION_PROTOCOL: http
+      APPLICATION_PROTOCOL: SSL
       DISTANCE_UNIT: km
       PHOTON_API_HOST: photon.komoot.io
       PHOTON_API_USE_HTTPS: true
@@ -114,9 +114,9 @@ services:
       DATABASE_PASSWORD: password
       DATABASE_NAME: dawarich_development
       APPLICATION_HOST: localhost
-      APPLICATION_HOSTS: localhost
+      APPLICATION_HOSTS: localhost,map.mituu.wtf
       BACKGROUND_PROCESSING_CONCURRENCY: 10
-      APPLICATION_PROTOCOL: http
+      APPLICATION_PROTOCOL: SSL
       DISTANCE_UNIT: km
       PHOTON_API_HOST: photon.komoot.io
       PHOTON_API_USE_HTTPS: true
