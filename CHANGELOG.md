@@ -1,9 +1,269 @@
-
 # Change Log
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
+
+
+# 0.25.4 - 2025-04-02
+
+⚠️ This release includes a breaking change. ⚠️
+
+Make sure to add `dawarich_storage` volume and `SELF_HOSTED: "true"` to your `docker-compose.yml` file. Example:
+
+```diff
+...
+
+  dawarich_app:
+    image: freikin/dawarich:latest
+    container_name: dawarich_app
+    volumes:
+      - dawarich_public:/var/app/public
+      - dawarich_watched:/var/app/tmp/imports/watched
++     - dawarich_storage:/var/app/storage
+...
+    environment:
++     SELF_HOSTED: "true"
+
+...
+
+  dawarich_sidekiq:
+    image: freikin/dawarich:latest
+    container_name: dawarich_sidekiq
+    volumes:
+      - dawarich_public:/var/app/public
+      - dawarich_watched:/var/app/tmp/imports/watched
++     - dawarich_storage:/var/app/storage
+...
+    environment:
++     SELF_HOSTED: "true"
+
+
+volumes:
+  dawarich_db_data:
+  dawarich_shared:
+  dawarich_public:
+  dawarich_watched:
++ dawarich_storage:
+```
+
+
+In this release we're changing the way import files are being stored. Previously, they were being stored in the `raw_data` column of the `imports` table. Now, they are being attached to the import record. All new imports will be using the new storage, to migrate existing imports, you can use the `rake imports:migrate_to_new_storage` task. Run it in the container shell.
+
+This is an optional task, that will not affect your points or other data.
+Big imports might take a while to migrate, so be patient.
+
+Also, you can now migrate existing exports to the new storage using the `rake exports:migrate_to_new_storage` task (in the container shell) or just delete them.
+
+If your hardware doesn't have enough memory to migrate the imports, you can delete your imports and re-import them.
+
+## Added
+
+- Sentry is now can be used for error tracking.
+- Subscription management is now available in non self-hosted mode.
+
+## Changed
+
+- Import files are now being attached to the import record instead of being stored in the `raw_data` database column.
+- Import files can now be stored in S3-compatible storage.
+- Export files are now being attached to the export record instead of being stored in the file system.
+- Export files can now be stored in S3-compatible storage.
+- Users can now import Google's Records.json file via the UI instead of using the CLI.
+- Optional telemetry sending is now disabled and will be removed in the future.
+
+## Fixed
+
+- Moving points on the map now works correctly. #957
+- `rake points:migrate_to_lonlat` task now also reindexes the points table.
+- Fixed filling `lonlat` column for old places after reverse geocoding.
+- Deleting an import now correctly recalculates stats.
+- Datetime across the app is now being displayed in human readable format, i.e 26 Dec 2024, 13:49. Hover over the datetime to see the ISO 8601 timestamp.
+
+
+# 0.25.3 - 2025-03-22
+
+## Fixed
+
+- Fixed missing `rake points:migrate_to_lonlat` task.
+
+# 0.25.2 - 2025-03-21
+
+## Fixed
+
+- Migration to add unique index to points now contains code to remove duplicates from the database.
+- Issue with ESRI maps not being displayed correctly. #956
+
+## Added
+
+- `rake data_cleanup:remove_duplicate_points` task added to remove duplicate points from the database and export them to a CSV file.
+- `rake points:migrate_to_lonlat` task added for convenient manual migration of points to the new `lonlat` column.
+- `rake users:activate` task added to activate all users.
+
+## Changed
+
+- Merged visits now use the combined name of the merged visits.
+
+# 0.25.1 - 2025-03-17
+
+## Fixed
+
+- Coordinates on the Points page are now being displayed correctly.
+
+# 0.25.0 - 2025-03-09
+
+This release is focused on improving the visits experience.
+
+Since previous implementation of visits was not working as expected, this release introduces a new approach. It is recommended to remove all _non-confirmed_ visits before or after updating to this version.
+
+There is a known issue when data migrations are not being run automatically on some systems. If you're experiencing issues when opening map page, trips page or when trying to see visits, try executing the following command in the [Console](https://dawarich.app/docs/FAQ/#how-to-enter-dawarich-console):
+
+```ruby
+User.includes(:tracked_points, visits: :places).find_each do |user|
+  places_to_update = user.places.where(lonlat: nil)
+
+  # For each place, set the lonlat value based on longitude and latitude
+  places_to_update.find_each do |place|
+    next if place.longitude.nil? || place.latitude.nil?
+
+    # Set the lonlat to a PostGIS point with the proper SRID
+    # rubocop:disable Rails/SkipsModelValidations
+    place.update_column(:lonlat, "SRID=4326;POINT(#{place.longitude} #{place.latitude})")
+    # rubocop:enable Rails/SkipsModelValidations
+  end
+
+  user.tracked_points.update_all('lonlat = ST_SetSRID(ST_MakePoint(longitude, latitude), 4326)')
+end
+```
+
+With any errors, don't hesitate to ask for help in the [Discord server](https://discord.gg/pHsBjpt5J8).
+
+## Added
+
+- A new button to open the visits drawer.
+- User can now confirm or decline visits directly from the visits drawer.
+- Visits are now being shown on the map: orange circles for suggested visits and slightly bigger blue circles for confirmed visits.
+- User can click on a visit circle to rename it and select a place for it.
+- User can click on a visit card in the drawer panel to move to it on the map.
+- User can select click on the "Select area" button in the top right corner of the map to select an area on the map. Once area is selected, visits for all times in that area will be shown on the map, regardless of whether they are in the selected time range or not.
+- User can now select two or more visits in the visits drawer and merge them into a single visit. This operation is not reversible.
+- User can now select two or more visits in the visits drawer and confirm or decline them at once. This operation is not reversible.
+- Status field to the User model. Inactive users are now being restricted from accessing some of the functionality, which is mostly about writing data to the database. Reading is remaining unrestricted.
+- After user is created, a sample import is being created for them to demonstrate how to use the app.
+
+
+## Changed
+
+- Links to Points, Visits & Places, Imports and Exports were moved under "My data" section in the navbar.
+- Restrict access to Sidekiq in non self-hosted mode.
+- Restrict access to background jobs in non self-hosted mode.
+- Restrict access to users management in non self-hosted mode.
+- Restrict access to API for inactive users.
+- All users in self-hosted mode are active by default.
+- Points are now using `lonlat` column for storing longitude and latitude.
+- Semantic history points are now being imported much faster.
+- GPX files are now being imported much faster.
+- Trips, places and points are now using PostGIS' database attributes for storing longitude and latitude.
+- Distance calculation are now using Postgis functions and expected to be more accurate.
+
+## Fixed
+
+- Fixed a bug where non-admin users could not import Immich and Photoprism geolocation data.
+- Fixed a bug where upon point deletion it was not being removed from the map, while it was actually deleted from the database. #883
+- Fixed a bug where upon import deletion stats were not being recalculated. #824
+
+# 0.24.1 - 2025-02-13
+
+## Custom map tiles
+
+In the user settings, you can now set a custom tile URL for the map. This is useful if you want to use a custom map tile provider or if you want to use a map tile provider that is not listed in the dropdown.
+
+To set a custom tile URL, go to the user settings and set the `Maps` section to your liking. Be mindful that currently, only raster tiles are supported. The URL should be a valid tile URL, like `https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png`. You, as the user, are responsible for any extra costs that may occur due to using a custom tile URL.
+
+### Added
+
+- Safe settings for user with default values.
+- Nominatim API is now supported as a reverse geocoding provider.
+- In the user settings, you can now set a custom tile URL for the map. #429 #715
+- In the user map settings, you can now see a chart of map tiles usage.
+- If you have Prometheus exporter enabled, you can now see a `ruby_dawarich_map_tiles` metric in Prometheus, which shows the total number of map tiles loaded. Example:
+
+```
+# HELP ruby_dawarich_map_tiles_usage
+# TYPE ruby_dawarich_map_tiles_usage counter
+ruby_dawarich_map_tiles_usage 99
+```
+
+### Fixed
+
+- Speed on the Points page is now being displayed in kilometers per hour. #700
+- Fog of war displacement #774
+
+### Reverted
+
+- #748
+
+# 0.24.0 - 2025-02-10
+
+## Points speed units
+
+Dawarich expects speed to be sent in meters per second. It's already known that OwnTracks and GPSLogger (in some configurations) are sending speed in kilometers per hour.
+
+In GPSLogger it's easily fixable: if you previously had `"vel": "%SPD_KMH"`, change it to `"vel": "%SPD"`, like it's described in the [docs](https://dawarich.app/docs/tutorials/track-your-location#gps-logger).
+
+In OwnTracks it's a bit more complicated. You can't change the speed unit in the settings, so Dawarich will expect speed in kilometers per hour and will convert it to meters per second. Nothing is needed to be done from your side.
+
+Now, we need to fix existing points with speed in kilometers per hour. The following guide assumes that you have been tracking your location exclusively with speed in kilometers per hour. If you have been using both speed units (say, were tracking with OwnTracks in kilometers per hour and with GPSLogger in meters per second), you need to decide what to do with points that have speed in kilometers per hour, as there is no easy way to distinguish them from points with speed in meters per second.
+
+To convert speed in kilometers per hour to meters per second in your points, follow these steps:
+
+1. Enter [Dawarich console](https://dawarich.app/docs/FAQ#how-to-enter-dawarich-console)
+2. Run `points = Point.where(import_id: nil).where.not(velocity: [nil, "0"]).where("velocity NOT LIKE '%.%'")`. This will return all tracked (not imported) points.
+3. Run
+```ruby
+points.update_all("velocity = CAST(ROUND(CAST((CAST(velocity AS FLOAT) * 1000 / 3600) AS NUMERIC), 1) AS TEXT)")
+
+```
+
+This will convert speed in kilometers per hour to meters per second and round it to 1 decimal place.
+
+If you have been using both speed units, but you know the dates where you were tracking with speed in kilometers per hour, on the second step of the instruction above, you can add `where("timestamp BETWEEN ? AND ?", Date.parse("2025-01-01").beginning_of_day.to_i, Date.parse("2025-01-31").end_of_day.to_i)` to the query to convert speed in kilometers per hour to meters per second only for a specific period of time. Resulting query will look like this:
+
+```ruby
+start_at = DateTime.new(2025, 1, 1, 0, 0, 0).in_time_zone(Time.current.time_zone).to_i
+end_at = DateTime.new(2025, 1, 31, 23, 59, 59).in_time_zone(Time.current.time_zone).to_i
+points = Point.where(import_id: nil).where.not(velocity: [nil, "0"]).where("timestamp BETWEEN ? AND ?", start_at, end_at).where("velocity NOT LIKE '%.%'")
+```
+
+This will select points tracked between January 1st and January 31st 2025. Then just use step 3 to convert speed in kilometers per hour to meters per second.
+
+### Changed
+
+- Speed for points, that are sent to Dawarich via `POST /api/v1/owntracks/points` endpoint, will now be converted to meters per second, if `topic` param is sent. The official GPSLogger instructions are assuming user won't be sending `topic` param, so this shouldn't affect you if you're using GPSLogger.
+
+### Fixed
+
+- After deleting one point from the map, other points can now be deleted as well. #723 #678
+- Fixed a bug where export file was not being deleted from the server after it was deleted. #808
+- After an area was drawn on the map, a popup is now being shown to allow user to provide a name and save the area. #740
+- Docker entrypoints now use database name to fix problem with custom database names.
+- Garmin GPX files with empty tracks are now being imported correctly. #827
+
+### Added
+
+- `X-Dawarich-Version` header to the `GET /api/v1/health` endpoint response.
+
+# 0.23.6 - 2025-02-06
+
+### Added
+
+- Enabled Postgis extension for PostgreSQL.
+- Trips are now store their paths in the database independently of the points.
+- Trips are now being rendered on the map using their precalculated paths instead of list of coordinates.
+
+### Changed
+
+- Ruby version was updated to 3.4.1.
+- Requesting photos on the Map page now uses the start and end dates from the URL params. #589
 
 # 0.23.5 - 2025-01-22
 
@@ -268,7 +528,7 @@ To mount a custom `postgresql.conf` file, you need to create a `postgresql.conf`
 
 ```diff
   dawarich_db:
-    image: postgres:14.2-alpine
+    image: postgis/postgis:14-3.5-alpine
     shm_size: 1G
     container_name: dawarich_db
     volumes:
@@ -299,7 +559,7 @@ An example of a custom `postgresql.conf` file is provided in the `postgresql.con
 ```diff
   ...
   dawarich_db:
-    image: postgres:14.2-alpine
+    image: postgis/postgis:14-3.5-alpine
 +   shm_size: 1G
   ...
 ```
@@ -1240,7 +1500,7 @@ deploy:
       - shared_data:/var/shared/redis
 +   restart: always
   dawarich_db:
-    image: postgres:14.2-alpine
+    image: postgis/postgis:14-3.5-alpine
     container_name: dawarich_db
     volumes:
       - db_data:/var/lib/postgresql/data

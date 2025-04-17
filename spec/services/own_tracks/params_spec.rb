@@ -13,14 +13,13 @@ RSpec.describe OwnTracks::Params do
 
     let(:expected_json) do
       {
-        latitude: 52.225,
-        longitude: 13.332,
+        lonlat: 'POINT(13.332 52.225)',
         battery: 94,
         ping: 100.266,
         altitude: 36,
         accuracy: 10,
         vertical_accuracy: 4,
-        velocity: 0,
+        velocity: '1.4',
         ssid: 'Home Wifi',
         bssid: 'b0:f2:8:45:94:33',
         tracker_id: 'RO',
@@ -39,7 +38,7 @@ RSpec.describe OwnTracks::Params do
           'topic' => 'owntracks/test/iPhone 12 Pro',
           'alt' => 36,
           'lon' => 13.332,
-          'vel' => 0,
+          'vel' => 5,
           't' => 'p',
           'BSSID' => 'b0:f2:8:45:94:33',
           'SSID' => 'Home Wifi',

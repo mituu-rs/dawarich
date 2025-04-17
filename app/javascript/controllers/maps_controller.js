@@ -8,41 +8,32 @@ import { createMarkersArray } from "../maps/markers";
 import {
   createPolylinesLayer,
   updatePolylinesOpacity,
-  updatePolylinesColors,
-  calculateSpeed,
-  getSpeedColor
+  updatePolylinesColors
 } from "../maps/polylines";
 
-import { fetchAndDrawAreas } from "../maps/areas";
-import { handleAreaCreated } from "../maps/areas";
+import { fetchAndDrawAreas, handleAreaCreated } from "../maps/areas";
 
-import { showFlashMessage, fetchAndDisplayPhotos, debounce } from "../maps/helpers";
-
-import {
-  osmMapLayer,
-  osmHotMapLayer,
-  OPNVMapLayer,
-  openTopoMapLayer,
-  cyclOsmMapLayer,
-  esriWorldStreetMapLayer,
-  esriWorldTopoMapLayer,
-  esriWorldImageryMapLayer,
-  esriWorldGrayCanvasMapLayer
-} from "../maps/layers";
+import { showFlashMessage, fetchAndDisplayPhotos } from "../maps/helpers";
 import { countryCodesMap } from "../maps/country_codes";
+import { VisitsManager } from "../maps/visits";
 
 import "leaflet-draw";
 import { initializeFogCanvas, drawFogCanvas, createFogOverlay } from "../maps/fog_of_war";
+import { TileMonitor } from "../maps/tile_monitor";
+import BaseController from "./base_controller";
+import { createAllMapLayers } from "../maps/layers";
 
-export default class extends Controller {
+export default class extends BaseController {
   static targets = ["container"];
 
   settingsButtonAdded = false;
   layerControl = null;
   visitedCitiesCache = new Map();
   trackedMonthsCache = null;
+  currentPopup = null;
 
   connect() {
+    super.connect();
     console.log("Map controller connected");
 
     this.apiKey = this.element.dataset.api_key;
@@ -67,7 +58,7 @@ export default class extends Controller {
       imperial: this.distanceUnit === 'mi',
       metric: this.distanceUnit === 'km',
       maxWidth: 120
-    }).addTo(this.map)
+    }).addTo(this.map);
 
     // Add stats control
     const StatsControl = L.Control.extend({
@@ -107,7 +98,28 @@ export default class extends Controller {
     // Create a proper Leaflet layer for fog
     this.fogOverlay = createFogOverlay();
 
-    this.areasLayer = L.layerGroup(); // Initialize areas layer
+    // Create custom pane for areas
+    this.map.createPane('areasPane');
+    this.map.getPane('areasPane').style.zIndex = 650;
+    this.map.getPane('areasPane').style.pointerEvents = 'all';
+
+    // Create custom panes for visits
+    // Note: We'll still create visitsPane for backward compatibility
+    this.map.createPane('visitsPane');
+    this.map.getPane('visitsPane').style.zIndex = 600;
+    this.map.getPane('visitsPane').style.pointerEvents = 'all';
+
+    // Create separate panes for confirmed and suggested visits
+    this.map.createPane('confirmedVisitsPane');
+    this.map.getPane('confirmedVisitsPane').style.zIndex = 450;
+    this.map.getPane('confirmedVisitsPane').style.pointerEvents = 'all';
+
+    this.map.createPane('suggestedVisitsPane');
+    this.map.getPane('suggestedVisitsPane').style.zIndex = 460;
+    this.map.getPane('suggestedVisitsPane').style.pointerEvents = 'all';
+
+    // Initialize areasLayer as a feature group and add it to the map immediately
+    this.areasLayer = new L.FeatureGroup();
     this.photoMarkers = L.layerGroup();
 
     this.setupScratchLayer(this.countryCodesMap);
@@ -115,6 +127,9 @@ export default class extends Controller {
     if (!this.settingsButtonAdded) {
       this.addSettingsButton();
     }
+
+    // Initialize the visits manager
+    this.visitsManager = new VisitsManager(this.map, this.apiKey);
 
     // Initialize layers for the layer control
     const controlsLayer = {
@@ -124,7 +139,9 @@ export default class extends Controller {
       "Fog of War": new this.fogOverlay(),
       "Scratch map": this.scratchLayer,
       Areas: this.areasLayer,
-      Photos: this.photoMarkers
+      Photos: this.photoMarkers,
+      "Suggested Visits": this.visitsManager.getVisitCirclesLayer(),
+      "Confirmed Visits": this.visitsManager.getConfirmedVisitCirclesLayer()
     };
 
     // Initialize layer control first
@@ -218,8 +235,8 @@ export default class extends Controller {
         }
 
         const urlParams = new URLSearchParams(window.location.search);
-        const startDate = urlParams.get('start_at')?.split('T')[0] || new Date().toISOString().split('T')[0];
-        const endDate = urlParams.get('end_at')?.split('T')[0] || new Date().toISOString().split('T')[0];
+        const startDate = urlParams.get('start_at') || new Date().toISOString();
+        const endDate = urlParams.get('end_at')|| new Date().toISOString();
         await fetchAndDisplayPhotos({
           map: this.map,
           photoMarkers: this.photoMarkers,
@@ -240,6 +257,25 @@ export default class extends Controller {
     if (this.liveMapEnabled) {
       this.setupSubscription();
     }
+
+    // Initialize tile monitor
+    this.tileMonitor = new TileMonitor(this.apiKey);
+
+    // Add tile load event handlers to each base layer
+    Object.entries(this.baseMaps()).forEach(([name, layer]) => {
+      layer.on('tileload', () => {
+        this.tileMonitor.recordTileLoad(name);
+      });
+    });
+
+    // Start monitoring
+    this.tileMonitor.startMonitoring();
+
+    // Add the drawer button for visits
+    this.visitsManager.addDrawerButton();
+
+    // Fetch and display visits when map loads
+    this.visitsManager.fetchAndDisplayVisits();
   }
 
   disconnect() {
@@ -248,10 +284,18 @@ export default class extends Controller {
     }
     // Store panel state before disconnecting
     if (this.rightPanel) {
-      const finalState = document.querySelector('.leaflet-right-panel').style.display !== 'none' ? 'true' : 'false';
+      const panel = document.querySelector('.leaflet-right-panel');
+      const finalState = panel ? (panel.style.display !== 'none' ? 'true' : 'false') : 'false';
       localStorage.setItem('mapPanelOpen', finalState);
     }
-    this.map.remove();
+    if (this.map) {
+      this.map.remove();
+    }
+
+    // Stop tile monitoring
+    if (this.tileMonitor) {
+      this.tileMonitor.stopMonitoring();
+    }
   }
 
   setupSubscription() {
@@ -377,18 +421,34 @@ export default class extends Controller {
 
   baseMaps() {
     let selectedLayerName = this.userSettings.preferred_map_layer || "OpenStreetMap";
+    let maps = createAllMapLayers(this.map, selectedLayerName);
 
-    return {
-      OpenStreetMap: osmMapLayer(this.map, selectedLayerName),
-      "OpenStreetMap.HOT": osmHotMapLayer(this.map, selectedLayerName),
-      OPNV: OPNVMapLayer(this.map, selectedLayerName),
-      openTopo: openTopoMapLayer(this.map, selectedLayerName),
-      cyclOsm: cyclOsmMapLayer(this.map, selectedLayerName),
-      esriWorldStreet: esriWorldStreetMapLayer(this.map, selectedLayerName),
-      esriWorldTopo: esriWorldTopoMapLayer(this.map, selectedLayerName),
-      esriWorldImagery: esriWorldImageryMapLayer(this.map, selectedLayerName),
-      esriWorldGrayCanvas: esriWorldGrayCanvasMapLayer(this.map, selectedLayerName)
-    };
+    // Add custom map if it exists in settings
+    if (this.userSettings.maps && this.userSettings.maps.url) {
+      const customLayer = L.tileLayer(this.userSettings.maps.url, {
+        maxZoom: 19,
+        attribution: "&copy; OpenStreetMap contributors"
+      });
+
+      // If this is the preferred layer, add it to the map immediately
+      if (selectedLayerName === this.userSettings.maps.name) {
+        customLayer.addTo(this.map);
+        // Remove any other base layers that might be active
+        Object.values(maps).forEach(layer => {
+          if (this.map.hasLayer(layer)) {
+            this.map.removeLayer(layer);
+          }
+        });
+      }
+
+      maps[this.userSettings.maps.name] = customLayer;
+    } else {
+      // If no custom map is set, ensure a default layer is added
+      const defaultLayer = maps[selectedLayerName] || maps["OpenStreetMap"];
+      defaultLayer.addTo(this.map);
+    }
+
+    return maps;
   }
 
   removeEventListeners() {
@@ -441,10 +501,11 @@ export default class extends Controller {
   }
 
   deletePoint(id, apiKey) {
-    fetch(`/api/v1/points/${id}?api_key=${apiKey}`, {
+    fetch(`/api/v1/points/${id}`, {
       method: 'DELETE',
       headers: {
         'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`
       }
     })
     .then(response => {
@@ -485,13 +546,13 @@ export default class extends Controller {
       if (this.layerControl) {
         this.map.removeControl(this.layerControl);
         const controlsLayer = {
-          Points: this.markersLayer,
-          Routes: this.polylinesLayer,
-          Heatmap: this.heatmapLayer,
-          "Fog of War": this.fogOverlay,
-          "Scratch map": this.scratchLayer,
-          Areas: this.areasLayer,
-          Photos: this.photoMarkers
+          Points: this.markersLayer || L.layerGroup(),
+          Routes: this.polylinesLayer || L.layerGroup(),
+          Heatmap: this.heatmapLayer || L.layerGroup(),
+          "Fog of War": new this.fogOverlay(),
+          "Scratch map": this.scratchLayer || L.layerGroup(),
+          Areas: this.areasLayer || L.layerGroup(),
+          Photos: this.photoMarkers || L.layerGroup()
         };
         this.layerControl = L.control.layers(this.baseMaps(), controlsLayer).addTo(this.map);
       }
@@ -565,18 +626,23 @@ export default class extends Controller {
             fillOpacity: 0.5,
           },
         },
-      },
+      }
     });
 
     // Handle circle creation
-    this.map.on(L.Draw.Event.CREATED, (event) => {
+    this.map.on('draw:created', (event) => {
       const layer = event.layer;
 
       if (event.layerType === 'circle') {
-        handleAreaCreated(this.areasLayer, layer, this.apiKey);
+        try {
+          // Add the layer to the map first
+          layer.addTo(this.map);
+          handleAreaCreated(this.areasLayer, layer, this.apiKey);
+        } catch (error) {
+          console.error("Error in handleAreaCreated:", error);
+          console.error(error.stack); // Add stack trace
+        }
       }
-
-      this.drawnItems.addLayer(layer);
     });
   }
 
@@ -922,12 +988,17 @@ export default class extends Controller {
         const button = L.DomUtil.create('button', 'toggle-panel-button');
         button.innerHTML = '📅';
 
-        button.style.backgroundColor = 'white';
         button.style.width = '48px';
         button.style.height = '48px';
         button.style.border = 'none';
         button.style.cursor = 'pointer';
         button.style.boxShadow = '0 1px 4px rgba(0,0,0,0.3)';
+        button.style.backgroundColor = 'white';
+        button.style.borderRadius = '4px';
+        button.style.padding = '0';
+        button.style.lineHeight = '48px';
+        button.style.fontSize = '18px';
+        button.style.textAlign = 'center';
 
         // Disable map interactions when clicking the button
         L.DomEvent.disableClickPropagation(button);
@@ -1281,15 +1352,4 @@ export default class extends Controller {
 
     container.innerHTML = html;
   }
-
-  formatDuration(seconds) {
-    const days = Math.floor(seconds / (24 * 60 * 60));
-    const hours = Math.floor((seconds % (24 * 60 * 60)) / (60 * 60));
-
-    if (days > 0) {
-      return `${days}d ${hours}h`;
-    }
-    return `${hours}h`;
-  }
 }
-

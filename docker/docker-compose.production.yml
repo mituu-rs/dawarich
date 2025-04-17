@@ -17,7 +17,7 @@ services:
       start_period: 30s
       timeout: 10s
   dawarich_db:
-    image: postgres:17-alpine
+    image: postgres:17-alpine # TODO: Use postgis here
     shm_size: 1G
     container_name: dawarich_db
     volumes:
@@ -41,6 +41,7 @@ services:
     volumes:
       - dawarich_public:/var/app/public
       - dawarich_watched:/var/app/tmp/imports/watched
+      - dawarich_storage:/var/app/storage
     networks:
       - dawarich
     ports:
@@ -98,6 +99,7 @@ services:
     volumes:
       - dawarich_public:/var/app/public
       - dawarich_watched:/var/app/tmp/imports/watched
+      - dawarich_storage:/var/app/storage
     networks:
       - dawarich
     stdin_open: true
@@ -154,3 +156,4 @@ volumes:
   dawarich_redis_data:
   dawarich_public:
   dawarich_watched:
+  dawarich_storage:

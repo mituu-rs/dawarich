@@ -6,8 +6,8 @@ class Areas::Visits::Create
   def initialize(user, areas)
     @user = user
     @areas = areas
-    @time_threshold_minutes = 30 || user.settings['time_threshold_minutes']
-    @merge_threshold_minutes = 15 || user.settings['merge_threshold_minutes']
+    @time_threshold_minutes = 30 || user.safe_settings.time_threshold_minutes
+    @merge_threshold_minutes = 15 || user.safe_settings.merge_threshold_minutes
   end
 
   def call
@@ -38,7 +38,7 @@ class Areas::Visits::Create
       end
 
     points = Point.where(user_id: user.id)
-                  .near([area.latitude, area.longitude], area_radius, units: DISTANCE_UNIT)
+                  .near([area.latitude, area.longitude], area_radius, DISTANCE_UNIT)
                   .order(timestamp: :asc)
 
     # check if all points within the area are assigned to a visit
